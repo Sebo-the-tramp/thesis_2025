@@ -31,8 +31,7 @@ def main(
         downsample_factor: Downsample factor for the images.
     """
     server = viser.ViserServer()
-    # server.gui.configure_theme(titlebar_content=None, control_layout="collapsible")
-    
+    # server.gui.configure_theme(titlebar_content=None, control_layout="collapsible")    
 
     # Load the colmap info.
     cameras = read_cameras_binary(colmap_path / "cameras.bin")
@@ -42,6 +41,10 @@ def main(
         "Reset up direction",
         hint="Set the camera control 'up' direction to the current camera's 'up'.",
     )
+
+    ##########################
+    #         GUI            #
+    ##########################
 
     @gui_reset_up.on_click
     def _(event: viser.GuiEvent) -> None:
@@ -63,15 +66,15 @@ def main(
         min=1,
         max=len(images),
         step=1,
-        initial_value=min(len(images), 100),
+        initial_value=min(len(images), 200),
     )
     gui_point_size = server.gui.add_slider(
         "Point size", min=0.01, max=0.1, step=0.001, initial_value=0.01
-    )
+    )    
 
-    gui_shift_size = server.gui.add_slider(
-        "Shift", min=-10, max=10, step=0.1, initial_value=0
-    )
+    ##########################
+    #         COLMAP         #
+    ##########################
 
     points = np.array([points3d[p_id].xyz for p_id in points3d])
     colors = np.array([points3d[p_id].rgb for p_id in points3d])
@@ -90,8 +93,7 @@ def main(
         """Send all COLMAP elements to viser for visualization. This could be optimized
         a ton!"""
 
-        target_rot = None
-        target_trans = None
+        T_world_camera_metadata = {}
 
         # Remove existing image frames.
         for frame in frames:
@@ -122,9 +124,7 @@ def main(
             # print(image_filename)          
             if not image_filename.exists():
                 print("not exists", image_filename)
-                continue                  
-
-            # print(img.qvec, img.tvec)
+                continue            
 
             final_rotation = R.from_euler("xyz", [0, 0, 90], degrees=True).as_matrix() @ R.from_quat(img.qvec).as_matrix()
             final_rotation_quad = R.from_matrix(final_rotation).as_quat()
@@ -132,11 +132,14 @@ def main(
             T_world_camera = tf.SE3.from_rotation_and_translation(
                 tf.SO3(final_rotation_quad), img.tvec
             ).inverse()
+            
+            # print(f"Image {img.name[1:-4]}: {T_world_camera}")
+            # saving the rotation and translation info to be used later
+            T_world_camera_metadata[img.name[1:-4]] = T_world_camera             
 
-            if(img.name[1:] == "00002.jpg"):                
-                target_rot = T_world_camera.rotation().wxyz
-                target_trans = T_world_camera.translation()                 
-                color = (1.0, 0.0, 1.0)    
+            if(img.name[1:-4] == "00002" or img.name[1:-4] == "00100"):
+                color = (1.0, 0.0, 1.0)
+                print(T_world_camera.translation())
 
             frame = server.scene.add_frame(
                 f"/colmap/frame_{img_id}",
@@ -162,73 +165,172 @@ def main(
             attach_callback(frustum, frame)
 
 
-        # adding new cloudpoint       
-        scene = trimesh.load_mesh("./_assets/tmpw3y8h0ai_scene.glb", process=False)
+        ##########################
+        #     DENSER clouds      #
+        ##########################
+
+
+        pairs_mateadata = {}
+
+        with open("./_assets/image_pairs.txt") as f:
+            lines = f.readlines()
+            pairs = [line.strip().split(",") for line in lines]            
+
+        for pair in pairs:
+
+            print(f'./_assets/{pair[0]}-{pair[1]}.glb') 
+            scene = trimesh.load_mesh(f"./_assets/{pair[0]}-{pair[1]}.glb", process=False)
+
+            # creating the shift from the origin to reset the pivot point to the camera origin
+            # this is to make everything easier to rotate with respect to the world origin
+            frustum_points = np.array(scene.geometry["geometry_2"].vertices)
+            print(frustum_points[1])
+
+            # frustum_points = np.array(scene.geometry["geometry_4"].vertices) 
+            # print(frustum_points[1]) 
+
+            origin_frustum = frustum_points[1]            
+
+            points = np.array(scene.geometry["geometry_0"].vertices) - origin_frustum
+            frustum_points = np.array(scene.geometry["geometry_2"].vertices) - origin_frustum
+
+            # creating a best approximation of 4 points in the image polane of the frustum
+            # TODO analytically calculate the real values from fov and fx, fy
+            aspect = W / H
+            best_approximation = np.array([[0.19,-0.19/aspect,0.19],[-0.19,-0.19/aspect,0.19], [-0.19,0.19/aspect,0.19],[0.19,0.19/aspect,0.19]])    
+
+            mean_points = np.vstack((frustum_points[:1], frustum_points[2:5]))            
+
+            frustum_mine_3 = server.scene.add_camera_frustum(
+                name=f"mast3r/{pair[0]}/camera_frustum",
+                fov=2 * np.arctan2(H / 2, fy),
+                aspect=W / H,
+                scale=0.11,
+                color=(1.0, 0.0, 1.0),
+                position=T_world_camera_metadata[pair[0]].translation(),
+                wxyz=T_world_camera_metadata[pair[0]].rotation().wxyz                
+            )
+
+            frustum_mine_0 = server.scene.add_point_cloud(
+                name=f"mast3r/{pair[0]}/frustum",
+                points = mean_points,
+                colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
+                point_size = gui_point_size.value,                
+            )
+            
+            # denser_pc_2_after = server.scene.add_point_cloud(
+            #     name=f"mast3r/{pair[0]}/best_approx_after_rotation",
+            #     points = points*1.7,
+            #     colors = np.ones_like(points)*0.5,
+            #     point_size = gui_point_size.value,                
+            # )
+
+            # denser_pc_2_after = server.scene.add_point_cloud(
+            #     name=f"mast3r/{pair[0]}/test",
+            #     points = points,
+            #     colors = np.ones_like(points)*0.5,
+            #     point_size = gui_point_size.value,                
+            # )
+
+
+
+            rot, _, _ = R.align_vectors(mean_points, best_approximation, return_sensitivity=True)        
+
+            print(float(pair[2]))
+
+            new_points_after = mean_points @ rot.as_matrix()
+            denser_pc_2_after = server.scene.add_point_cloud(
+                name=f"mast3r/{pair[0]}/best_approx_after_rotation",
+                points = new_points_after,
+                colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
+                point_size = gui_point_size.value,
+                wxyz=T_world_camera_metadata[pair[0]].rotation().wxyz
+            )
+
+            new_dense_cloud_after = points @ rot.as_matrix()
+            print(T_world_camera_metadata[pair[0]].translation())
+
+            denser_pc_2_after = server.scene.add_point_cloud(
+                name=f"mast3r/{pair[0]}/scene_after_rotation",
+                points = new_dense_cloud_after*float(pair[2]),
+                colors = np.ones_like(points)*0.5,
+                point_size = gui_point_size.value,             
+                wxyz=T_world_camera_metadata[pair[0]].rotation().wxyz,
+                position=T_world_camera_metadata[pair[0]].translation(),
+            )        
+
+
+ 
+ 
+
+
+        # # adding new cloudpoint       
+        # scene = trimesh.load_mesh("./_assets/tmpw3y8h0ai_scene.glb", process=False)
         
-        # adding new origin to shift the rotation point to the frustum origin point
-        new_origin = np.array([-0.24831064,  0.37235096,  2.46506047])       
-        points = np.array(scene.geometry["geometry_0"].vertices) - new_origin        
+        # # adding new origin to shift the rotation point to the frustum origin point
+        # new_origin = np.array([-0.24831064,  0.37235096,  2.46506047])       
+        # points = np.array(scene.geometry["geometry_0"].vertices) - new_origin        
 
-        frustum_points = np.array(scene.geometry["geometry_2"].vertices) - new_origin             
+        # frustum_points = np.array(scene.geometry["geometry_2"].vertices) - new_origin             
 
 
-        # computing rotation of the frustum of the pc
-        mean_points = np.vstack((frustum_points[:1], frustum_points[2:5]))        
+        # # computing rotation of the frustum of the pc
+        # mean_points = np.vstack((frustum_points[:1], frustum_points[2:5]))        
 
-        aspect = W / H                
-        best_approximation = np.array([[0.19,-0.19/aspect,0.19],[-0.19,-0.19/aspect,0.19], [-0.19,0.19/aspect,0.19],[0.19,0.19/aspect,0.19]])    
-        # best_approximation = best_approximation @ R.from_quat(target_rot, scalar_first=True).as_matrix()    
+        # aspect = W / H                
+        # best_approximation = np.array([[0.19,-0.19/aspect,0.19],[-0.19,-0.19/aspect,0.19], [-0.19,0.19/aspect,0.19],[0.19,0.19/aspect,0.19]])    
+        # # best_approximation = best_approximation @ R.from_quat(target_rot, scalar_first=True).as_matrix()    
 
-        denser_pc_2 = server.scene.add_point_cloud(
-            name="mast3r/image center",
-            # points = np.array([[0.18, 0.2, 0.18/aspect],[0.18, 0.2, -0.18/aspect], [-0.18, 0.2, 0.18/aspect], [-0.18, 0.2, -0.18/aspect]]),
-            points = best_approximation, 
-            colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
-            point_size = 0.01,
-            wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True) 
-            # wxyz=R.from_matrix(result_rotation).as_quat(scalar_first=True)
-        )   
+        # denser_pc_2 = server.scene.add_point_cloud(
+        #     name="mast3r/image center",
+        #     # points = np.array([[0.18, 0.2, 0.18/aspect],[0.18, 0.2, -0.18/aspect], [-0.18, 0.2, 0.18/aspect], [-0.18, 0.2, -0.18/aspect]]),
+        #     points = best_approximation, 
+        #     colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
+        #     point_size = 0.01,
+        #     wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True) 
+        #     # wxyz=R.from_matrix(result_rotation).as_quat(scalar_first=True)
+        # )   
 
-        frustum_mine_3 = server.scene.add_camera_frustum(
-            name="Camera Frustum Mine Target 3",
-            fov=2 * np.arctan2(H / 2, fy),
-            aspect=W / H,
-            scale=0.11,
-            color=(1.0, 0.0, 1.0),
-            wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True)
-            # wxyz=np.array([0, 0, 0, 1]),
-        )
+        # frustum_mine_3 = server.scene.add_camera_frustum(
+        #     name="Camera Frustum Mine Target 3",
+        #     fov=2 * np.arctan2(H / 2, fy),
+        #     aspect=W / H,
+        #     scale=0.11,
+        #     color=(1.0, 0.0, 1.0),
+        #     wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True)
+        #     # wxyz=np.array([0, 0, 0, 1]),
+        # )
 
-        frustum_mine_0 = server.scene.add_point_cloud(
-            name="mast3r/frustum",
-            points = mean_points,
-            colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
-            point_size = gui_point_size.value,            
-            # wxyz=R.from_matrix(result_rotation).as_quat(scalar_first=True)
-        )     
+        # frustum_mine_0 = server.scene.add_point_cloud(
+        #     name="mast3r/frustum",
+        #     points = mean_points,
+        #     colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
+        #     point_size = gui_point_size.value,            
+        #     # wxyz=R.from_matrix(result_rotation).as_quat(scalar_first=True)
+        # )     
 
-        rot, _, _ = R.align_vectors(mean_points, best_approximation, return_sensitivity=True)        
+        # rot, _, _ = R.align_vectors(mean_points, best_approximation, return_sensitivity=True)        
 
-        new_points_after = mean_points @ rot.as_matrix()
-        denser_pc_2_after = server.scene.add_point_cloud(
-            name="mast3r/best_approx_after_rotation",
-            points = new_points_after,
-            colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
-            point_size = gui_point_size.value,
-            wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True)  
-            # wxyz=R.from_matrix(rot.as_matrix()).as_quat(scalar_first=True),
-            # position=new_origin
-        )
+        # new_points_after = mean_points @ rot.as_matrix()
+        # denser_pc_2_after = server.scene.add_point_cloud(
+        #     name="mast3r/best_approx_after_rotation",
+        #     points = new_points_after,
+        #     colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
+        #     point_size = gui_point_size.value,
+        #     wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True)  
+        #     # wxyz=R.from_matrix(rot.as_matrix()).as_quat(scalar_first=True),
+        #     # position=new_origin
+        # )
 
-        new_dense_cloud_after = points @ rot.as_matrix()
-        denser_pc_2_after = server.scene.add_point_cloud(
-            name="mast3r/scene_after_rotation",
-            points = new_dense_cloud_after*1.7,
-            colors = np.ones_like(points)*0.5,
-            point_size = gui_point_size.value,             
-            wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True), 
-            position=target_trans
-        )        
+        # new_dense_cloud_after = points @ rot.as_matrix()
+        # denser_pc_2_after = server.scene.add_point_cloud(
+        #     name="mast3r/scene_after_rotation",
+        #     points = new_dense_cloud_after*1.7,
+        #     colors = np.ones_like(points)*0.5,
+        #     point_size = gui_point_size.value,             
+        #     wxyz=R.from_quat(target_rot, scalar_first=True).as_quat(scalar_first=True), 
+        #     position=target_trans
+        # )        
 
 
     need_update = True
@@ -247,11 +349,6 @@ def main(
     @gui_point_size.on_update
     def _(_) -> None:
         point_cloud.point_size = gui_point_size.value
-
-    @gui_shift_size.on_update
-    def _(_) -> None:
-        shift = np.array([gui_shift_size.value, 0, 0])
-        frustum_pc.points = frustum_points + shift
 
     
 

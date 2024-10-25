@@ -90,15 +90,13 @@ def main(
     points = np.array([points3d[p_id].xyz for p_id in points3d])
     colors = np.array([points3d[p_id].rgb for p_id in points3d])
 
-
-
     point_mask = np.random.choice(points.shape[0], gui_points.value, replace=False)
     point_cloud = server.scene.add_point_cloud(
         name="/colmap/pcd",
         points=points[point_mask],
         colors=colors[point_mask],
         point_size=gui_point_size.value,
-        wxyz=R.from_euler("xyz", [180, 0, -90], degrees=True).as_quat(),
+        wxyz=R.from_euler("xyz", [180, 0, 0], degrees=True).as_quat(),
     )
     frames: List[viser.FrameHandle] = []
 
@@ -111,7 +109,6 @@ def main(
         N = 0  # Replace with the desired size
         denser_points = np.empty((N, 3), dtype=np.uint8)
         denser_colors = np.empty((N, 3), dtype=np.uint8)
-        print(denser_colors.shape)
 
         # Remove existing image frames.
         for frame in frames:
@@ -144,7 +141,7 @@ def main(
                 print("not exists", image_filename)
                 continue            
 
-            final_rotation = R.from_euler("xyz", [0, 0, 90], degrees=True).as_matrix() @ R.from_quat(img.qvec).as_matrix()
+            final_rotation = R.from_euler("xyz", [0, 0, 0], degrees=True).as_matrix() @ R.from_quat(img.qvec).as_matrix()
             final_rotation_quad = R.from_matrix(final_rotation).as_quat()
 
             T_world_camera = tf.SE3.from_rotation_and_translation(
@@ -185,13 +182,11 @@ def main(
 
         ##########################
         #     DENSER clouds      #
-        ##########################
-
-        pairs_mateadata = {}
+        ##########################        
 
         with open("./_assets/image_pairs.txt") as f:
             lines = f.readlines()
-            pairs = [line.strip().split(",") for line in lines]            
+            pairs = [line.strip().split(",") for line in lines]
 
         for pair in pairs:
             file_path = f"./_assets/{pair[0]}-{pair[1]}.glb"
@@ -204,7 +199,6 @@ def main(
                 print("Buffer needs decoding...")
                 gltf.buffers[0].data = gltf._glb_data
               
-            color_accessor = gltf.accessors[gltf.meshes[0].primitives[0].attributes.COLOR_0]
             color_view = gltf.bufferViews[gltf.meshes[0].primitives[0].attributes.COLOR_0]
 
             # Extract raw color data
@@ -217,26 +211,17 @@ def main(
             ).reshape(-1, 4)[:, :3]  # Reshape to RGBA
             
             # Convert to float32 and normalize to 0-1 range
-            colors_float = raw_colors.astype(np.float32) / 255.0
-            print("colors_float", colors_float)
-            print("dense colors", colors_float.shape)
-            print("denser_colors", denser_colors.shape)
+            colors_float = raw_colors.astype(np.float32) / 255.0            
             # only add RGB values
-            denser_colors = np.concatenate((denser_colors[:, :3], colors_float), axis=0)
-            print("colors shape", colors_float.shape)
+            denser_colors = np.concatenate((denser_colors[:, :3], colors_float), axis=0)            
 
             # creating the shift from the origin to reset the pivot point to the camera origin
             # this is to make everything easier to rotate with respect to the world origin
-            frustum_points = np.array(scene.geometry["geometry_2"].vertices)
-            print(frustum_points[1])
-
-            # frustum_points = np.array(scene.geometry["geometry_4"].vertices) 
-            # print(frustum_points[1]) 
+            frustum_points = np.array(scene.geometry["geometry_2"].vertices)                
 
             origin_frustum = frustum_points[1]            
 
             points = np.array(scene.geometry["geometry_0"].vertices) - origin_frustum
-            denser_points = np.concatenate((denser_points, points), axis=0)
             frustum_points = np.array(scene.geometry["geometry_2"].vertices) - origin_frustum
 
             # creating a best approximation of 4 points in the image polane of the frustum
@@ -266,7 +251,7 @@ def main(
             rot, _, _ = R.align_vectors(mean_points, best_approximation, return_sensitivity=True)            
 
             new_points_after = mean_points @ rot.as_matrix()
-            denser_pc_2_after = server.scene.add_point_cloud(
+            frustum_after = server.scene.add_point_cloud(
                 name=f"mast3r/{pair[0]}/best_approx_after_rotation",
                 points = new_points_after,
                 colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]),
@@ -275,33 +260,57 @@ def main(
             )
 
             new_dense_cloud_after = points @ rot.as_matrix()
-            print(T_world_camera_metadata[pair[0]].translation())
+            # applying rotation and translation and scaling on the points themselves so to make it easier to export
+            new_dense_cloud_after = ((new_dense_cloud_after@ R.from_quat(T_world_camera_metadata[pair[0]].rotation().wxyz, scalar_first=True).as_matrix().T) * float(pair[2])) + T_world_camera_metadata[pair[0]].translation()
+            denser_points = np.concatenate((denser_points, new_dense_cloud_after), axis=0)
 
             denser_pc_2_after = server.scene.add_point_cloud(
-                name=f"mast3r/{pair[0]}/scene_after_rotation",
-                points = new_dense_cloud_after*float(pair[2]),
+                name=f"mast3r/{pair[0]}/no rotation",
+                points = new_dense_cloud_after,
                 colors = colors_float,
-                point_size = gui_point_size.value,             
-                wxyz=T_world_camera_metadata[pair[0]].rotation().wxyz,
-                position=T_world_camera_metadata[pair[0]].translation(),
-            )  
+                point_size = gui_point_size.value,                
+            )   
 
         @gui_donwload_button.on_click
         def _(event: viser.GuiEvent) -> None:
+
+            print("Downloading...")
+
+            try:
+                client = event.client
+                assert client is not None
+                
+                denser_colors_int = denser_colors * 255
+
+                df = pd.DataFrame()
+                df["x"] = denser_points[:,0]
+                df["y"] = denser_points[:,1]
+                df["z"] = denser_points[:,2]
+                df["red"] = denser_colors_int[:,0].astype(np.uint8)
+                df["green"] = denser_colors_int[:,1].astype(np.uint8)
+                df["blue"] = denser_colors_int[:,2].astype(np.uint8)
+
+                cloud = PyntCloud(df)
+
+                cloud.to_file("output_ascii.ply", as_text=True)
+
+                client.add_notification(
+                    title="Download complete",
+                    body="Check your folders!",
+                    loading=False,
+                    with_close_button=True,
+                    auto_close=5000,
+                )
             
-            denser_colors_int = denser_colors * 255
-
-            df = pd.DataFrame()
-            df["x"] = denser_points[:,0]
-            df["y"] = denser_points[:,1]
-            df["z"] = denser_points[:,2]
-            df["red"] = denser_colors_int[:,0].astype(np.uint8)
-            df["green"] = denser_colors_int[:,1].astype(np.uint8)
-            df["blue"] = denser_colors_int[:,2].astype(np.uint8)
-
-            cloud = PyntCloud(df)
-
-            cloud.to_file("output_ascii.ply", as_text=True)
+            except Exception as e:
+                print(e)
+                client.add_notification(
+                    title="Download failed",
+                    body="Something went wrong!",
+                    loading=False,
+                    with_close_button=True,
+                    auto_close=5000,
+                )                
 
     need_update = True
 

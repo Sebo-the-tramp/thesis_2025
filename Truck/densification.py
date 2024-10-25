@@ -81,34 +81,37 @@ def main(
     gui_donwload_button = server.gui.add_button(
         "Download",
         hint="Download the current scene",
-    )
-
-    ##########################
-    #         COLMAP         #
-    ##########################
-
-    points = np.array([points3d[p_id].xyz for p_id in points3d])
-    colors = np.array([points3d[p_id].rgb for p_id in points3d])
-
-    point_mask = np.random.choice(points.shape[0], gui_points.value, replace=False)
-    point_cloud = server.scene.add_point_cloud(
-        name="/colmap/pcd",
-        points=points[point_mask],
-        colors=colors[point_mask],
-        point_size=gui_point_size.value,
-        wxyz=R.from_euler("xyz", [180, 0, 0], degrees=True).as_quat(),
-    )
-    frames: List[viser.FrameHandle] = []
+    )   
 
     def visualize_frames() -> None:
         """Send all COLMAP elements to viser for visualization. This could be optimized
         a ton!"""
 
+         ##########################
+        #         COLMAP         #
+        ##########################
+
+        points = np.array([points3d[p_id].xyz for p_id in points3d])
+        colors = np.array([points3d[p_id].rgb for p_id in points3d])    
+
+        # there is a weird conversion from point cloud and camera positions
+        # therefore we need this kind of addon to make everything works
+        points = points @ R.from_euler("xyz", [90, 0, 0], degrees=True).as_matrix()
+
+        point_mask = np.random.choice(points.shape[0], gui_points.value, replace=False)
+        point_cloud = server.scene.add_point_cloud(
+            name="/colmap/pcd",
+            points=points[point_mask],
+            colors=colors[point_mask],
+            point_size=gui_point_size.value,        
+        )
+        frames: List[viser.FrameHandle] = []
+
         T_world_camera_metadata = {}
 
         N = 0  # Replace with the desired size
-        denser_points = np.empty((N, 3), dtype=np.uint8)
-        denser_colors = np.empty((N, 3), dtype=np.uint8)
+        denser_points = points
+        denser_colors = colors
 
         # Remove existing image frames.
         for frame in frames:
@@ -141,7 +144,7 @@ def main(
                 print("not exists", image_filename)
                 continue            
 
-            final_rotation = R.from_euler("xyz", [0, 0, 0], degrees=True).as_matrix() @ R.from_quat(img.qvec).as_matrix()
+            final_rotation = R.from_euler("xyz", [0, 0, 90], degrees=True).as_matrix() @ R.from_quat(img.qvec).as_matrix()
             final_rotation_quad = R.from_matrix(final_rotation).as_quat()
 
             T_world_camera = tf.SE3.from_rotation_and_translation(
@@ -163,7 +166,7 @@ def main(
                 axes_length=0.1,
                 axes_radius=0.005,
             )
-            frames.append(frame)            
+            frames.append(frame)
 
             H, W = cam.height, cam.width
             fy = cam.params[1]
@@ -292,7 +295,7 @@ def main(
 
                 cloud = PyntCloud(df)
 
-                cloud.to_file("output_ascii.ply", as_text=True)
+                cloud.to_file("sparse_pc.ply", as_text=True)
 
                 client.add_notification(
                     title="Download complete",

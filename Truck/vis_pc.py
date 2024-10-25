@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from pyntcloud import PyntCloud
+import json
 
 import viser
 import viser.transforms as tf
@@ -39,8 +40,11 @@ def main(
     server = viser.ViserServer()
     # server.gui.configure_theme(titlebar_content=None, control_layout="collapsible")    
 
-    cloud = PyntCloud.from_file("./_assets/sparse_pc.ply")
-    print(cloud.points)
+    # ##########################
+    # #         COLMAP         #
+    # ##########################
+
+    cloud = PyntCloud.from_file("./sparse_pc.ply")
 
     colors = cloud.points[["red", "green", "blue"]].values / 255
     points = cloud.points[["x", "y", "z"]].values
@@ -54,23 +58,34 @@ def main(
     )    
 
     # ##########################
-    # #         COLMAP         #
+    # #         JSON           #
     # ##########################
 
-    # points = np.array([points3d[p_id].xyz for p_id in points3d])
-    # colors = np.array([points3d[p_id].rgb for p_id in points3d])
+    # Load the JSON file
+    json_path = "./_assets/transforms.json"
 
-    # point_mask = np.random.choice(points.shape[0], gui_points.value, replace=False)
-    # point_cloud = server.scene.add_point_cloud(
-    #     name="/colmap/pcd",
-    #     points=points[point_mask],
-    #     colors=colors[point_mask],
-    #     point_size=gui_point_size.value,
-    #     wxyz=R.from_euler("xyz", [180, 0, -90], degrees=True).as_quat(),
-    # )
-    # frames: List[viser.FrameHandle] = []    
+    with open(json_path, "r") as f:
+        data = json.load(f)
+        # print(data["frames"])
 
-    # need_update = True    
+        for frame in data["frames"]:
+            matrix = np.array(frame["transform_matrix"]).reshape(4, 4)
+            
+            rotation_matrix = matrix[:3, :3]
+            translation = matrix[:3, 3]
+
+            print(frame["colmap_im_id"], translation, rotation_matrix)
+
+            server.scene.add_camera_frustum(
+                name=str(frame["colmap_im_id"]),
+                aspect=1.7,
+                fov=60,
+                color=[random.random(), random.random(), random.random()],
+                scale=0.1,
+                position=translation,
+                wxyz=R.from_matrix(rotation_matrix).as_quat(scalar_first=True),
+            )
+
 
    
 

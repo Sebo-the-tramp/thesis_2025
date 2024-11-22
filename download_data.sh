@@ -1,0 +1,6 @@
+mkdir -p campus/section_01/00/video
+mkdir -p campus/section_01/01/video
+
+wget https://mbzuaiac-my.sharepoint.com/:v:/g/personal/sebastian_cavada_mbzuai_ac_ae/EX8AQwFx6gFAuYbIxdSbLvMBPc3hz3lnFvtUZNCd7NNywA?nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=uXyffF&download=1 -o ./campus/section_01/00/video/GX010041.MP4
+wget https://mbzuaiac-my.sharepoint.com/:v:/g/personal/sebastian_cavada_mbzuai_ac_ae/EX8AQwFx6gFAuYbIxdSbLvMBPc3hz3lnFvtUZNCd7NNywA?nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=uXyffF&download=1 -o ./campus/section_01/01/video/GX010026.MP4
+

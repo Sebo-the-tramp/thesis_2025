@@ -1,5 +1,9 @@
 **/_assets/*
 
+**/images/*
+
 *.bin
 *.ini
 *.ply
+
+*.MP4
